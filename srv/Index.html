@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="UTF-8">
+    <title><?= CFG.APP_NAME ?></title>
+    <?!= include('css.app'); ?>
+  </head>
+  <body>
+    <div id="app">
+      <?!= include('view.dashboard'); ?>
+      <?!= include('view.generate'); ?>
+    </div>
+
+    <?!= include('js.app'); ?>
+  </body>
+</html>

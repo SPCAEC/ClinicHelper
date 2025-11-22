@@ -1,0 +1,100 @@
+<script>
+  function navigateTo(id) {
+    document.querySelectorAll('.screen').forEach(el => {
+      el.classList.remove('active');
+    });
+    const screen = document.getElementById(id);
+    if (screen) screen.classList.add('active');
+  }
+
+  function navigateToDashboard() {
+    navigateTo('screenDashboard');
+  }
+
+  function navigateToGenerate() {
+    navigateTo('screenGenerate');
+  }
+
+  function navigateToLookup() {
+    navigateTo('screenLookup');
+  }
+
+  // Simple aliases for tiles
+  function navigateTo(screenId) {
+    document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
+    const el = document.getElementById(screenId);
+    if (el) el.classList.add('active');
+  }
+
+  function setGenerateMsg(html, type) {
+    const msg = document.getElementById('generateMsg');
+    msg.innerHTML = html;
+    msg.className = 'msg ' + (type || '');
+    if (type) {
+      msg.style.display = 'block';
+    } else {
+      msg.style.display = 'none';
+    }
+  }
+
+  function setSpinner(active) {
+    const overlay = document.getElementById('spinnerOverlay');
+    if (!overlay) return;
+    if (active) overlay.classList.add('active');
+    else overlay.classList.remove('active');
+  }
+
+  function onGenerateClick() {
+    const eventDateInput = document.getElementById('eventDate').value;
+    const eventDateText = document.getElementById('eventDateText').value.trim();
+    const eventLocation = document.getElementById('eventLocation').value.trim();
+    const startRow = document.getElementById('startRow').value;
+    const endRow = document.getElementById('endRow').value;
+
+    const payload = {
+      eventDate: eventDateText || eventDateInput, // use text override if provided
+      eventLocation: eventLocation,
+      startRow: Number(startRow),
+      endRow: Number(endRow),
+    };
+
+    if (!payload.eventDate || !payload.eventLocation || !payload.startRow || !payload.endRow) {
+      setGenerateMsg('Please complete all fields before generating.', 'error');
+      return;
+    }
+
+    setGenerateMsg('', '');
+    setSpinner(true);
+
+    google.script.run
+      .withSuccessHandler(onGenerateResult)
+      .withFailureHandler(function(err) {
+        setSpinner(false);
+        setGenerateMsg('Error: ' + (err && err.message ? err.message : err), 'error');
+      })
+      .apiGenerateLabels(payload);
+  }
+
+  function onGenerateResult(res) {
+    setSpinner(false);
+    if (!res || !res.ok) {
+      const msg = res && res.error ? res.error : 'Unknown error occurred.';
+      setGenerateMsg('Generation failed: ' + msg, 'error');
+      return;
+    }
+
+    let html = `<strong>Label generation complete.</strong><br>`;
+    html += `Created PDFs for <strong>${res.successCount}</strong> row(s).`;
+
+    if (res.errorCount && res.errorCount > 0) {
+      html += `<br><br><strong>${res.errorCount}</strong> row(s) failed:`;
+      html += `<ul style="margin:6px 0 0 18px;">`;
+      (res.errors || []).forEach(e => {
+        html += `<li>Row ${e.row}: ${e.message}</li>`;
+      });
+      html += `</ul>`;
+    }
+
+    setGenerateMsg(html, res.errorCount > 0 ? 'error' : 'success');
+  }
+</script>

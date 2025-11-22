@@ -1,0 +1,85 @@
+<div id="screenGenerate" class="screen">
+  <div class="app-shell">
+    <div class="app-header">
+      <button class="back-link" type="button" onclick="navigateTo('screenDashboard')">←</button>
+      <div>
+        <div class="app-title">Generate Owner / Pet Labels</div>
+        <div class="app-subtitle">
+          Enter the event details and row range from the SignupGenius sheet.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="form-grid">
+        <div class="field">
+          <label for="eventDate">Event Date</label>
+          <input id="eventDate" type="date">
+        </div>
+
+        <div class="field">
+          <label for="eventDateText">Event Date (text override, optional)</label>
+          <input id="eventDateText" type="text" placeholder="If different display text is needed">
+        </div>
+
+        <div class="field">
+          <label for="eventLocation">Event Location</label>
+          <input id="eventLocation" type="text" placeholder="SPCA Serving Erie County">
+        </div>
+
+        <div class="field">
+          <label for="startRow">Start Row # (Sheet)</label>
+          <input id="startRow" type="number" min="2" step="1" placeholder="2">
+        </div>
+
+        <div class="field">
+          <label for="endRow">End Row # (Sheet)</label>
+          <input id="endRow" type="number" min="2" step="1" placeholder="25">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn secondary" type="button" onclick="navigateTo('screenDashboard')">
+          Cancel
+        </button>
+        <button class="btn" type="button" onclick="onGenerateClick()">
+          Generate
+        </button>
+      </div>
+
+      <div id="generateMsg" class="msg"></div>
+    </div>
+  </div>
+
+  <div id="spinnerOverlay" class="spinner-overlay">
+    <div class="spinner-card">
+      <div class="spinner-dot"></div>
+      <div>
+        <div class="spinner-text-title">Generating labels…</div>
+        <div class="spinner-text-sub">
+          Please wait while we build the PDFs. This may take a moment.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Placeholder for future lookup screen -->
+<div id="screenLookup" class="screen">
+  <div class="app-shell">
+    <div class="app-header">
+      <button class="back-link" type="button" onclick="navigateTo('screenDashboard')">←</button>
+      <div>
+        <div class="app-title">Lookup Owner / Pet Labels</div>
+        <div class="app-subtitle">
+          Coming soon – this will let you search for pre-generated label PDFs.
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <p style="font-size:0.95rem; color:var(--text-muted);">
+        For this clinic, use the generated PDFs directly from the output folder if needed.
+      </p>
+    </div>
+  </div>
+</div>

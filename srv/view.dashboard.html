@@ -1,0 +1,32 @@
+<div id="screenDashboard" class="screen active">
+  <div class="app-shell">
+    <div class="app-header">
+      <a class="back-link" href="<?= CFG.HUB_URL ?>" title="Back to Service Tracking Hub">
+        ←
+      </a>
+      <div>
+        <div class="app-title">Clinic Labels</div>
+        <div class="app-subtitle">
+          Generate and look up Owner / Pet labels for clinic records.
+        </div>
+      </div>
+    </div>
+
+    <div class="tile-grid">
+      <div class="tile" onclick="navigateTo('screenGenerate')">
+        <div class="tile-title">Generate Owner / Pet Labels</div>
+        <div class="tile-desc">
+          Use the SignupGenius export to pre-generate label PDFs for tomorrow’s clinic.
+        </div>
+      </div>
+
+      <div class="tile" onclick="navigateTo('screenLookup')">
+        <div class="tile-title">Lookup Owner / Pet</div>
+        <div class="tile-desc">
+          Search for an owner or pet label and open the stored PDF for printing.
+          <br><span style="font-size:0.8rem;color:var(--text-muted);">(Coming next.)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
