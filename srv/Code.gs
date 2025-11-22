@@ -276,59 +276,8 @@ function buildOutputFileName_(placeholders) {
 
 
 /**
- * For a single row:
- *  - Clone Owner and Pet templates
- *  - Replace placeholders
- *  - Export PDFs
- *  - Send 4 PDFs (Owner x2, Pet x2) to Render merge service (base64)
- *  - Save merged PDF in output folder
- */
-function createMergedLabelPdfForRow_(placeholders, outputName) {
-  const ownerTemplateFile = DriveApp.getFileById(CFG.OWNER_TEMPLATE_ID);
-  const petTemplateFile = DriveApp.getFileById(CFG.PET_TEMPLATE_ID);
-
-  const ownerCopy = ownerTemplateFile.makeCopy('Owner Label TMP');
-  const petCopy = petTemplateFile.makeCopy('Pet Label TMP');
-
-  try {
-    const ownerPres = SlidesApp.openById(ownerCopy.getId());
-    const petPres = SlidesApp.openById(petCopy.getId());
-
-    applyPlaceholdersToPresentation_(ownerPres, placeholders);
-    applyPlaceholdersToPresentation_(petPres, placeholders);
-
-    const ownerBlob = ownerCopy.getAs(MimeType.PDF).setName('owner.pdf');
-    const petBlob = petCopy.getAs(MimeType.PDF).setName('pet.pdf');
-
-    // We want 4 pages: Owner x2, Pet x2
-    const blobs = [ownerBlob, ownerBlob, petBlob, petBlob];
-
-    const mergedInfo = mergePdfsViaRender_(blobs, outputName);
-    return mergedInfo;
-
-  } finally {
-    // Clean up temporary Slides
-    try { ownerCopy.setTrashed(true); } catch (e) {}
-    try { petCopy.setTrashed(true); } catch (e) {}
-  }
-}
-
-
-/** Replace {{placeholders}} in all text boxes for a Slides presentation. */
-function applyPlaceholdersToPresentation_(presentation, placeholders) {
-  Object.keys(placeholders).forEach(key => {
-    if (!key.startsWith('{{')) return; // ignore internal _fields
-    const value = placeholders[key] || '';
-    presentation.replaceAllText(key, value);
-  });
-}
-
-
-/**
- * Merge PDFs via the same Render service used by Transportation Helper.
- *
- * pdfBlobs: array of Blob objects (owner x2, pet x2)
- * outputName: final merged filename
+ * Merge PDFs via Render service (same behavior as Transportation Helper,
+ * but using in-memory blobs instead of Drive file IDs).
  *
  * Request:
  *  {
@@ -339,13 +288,17 @@ function applyPlaceholdersToPresentation_(presentation, placeholders) {
  *    ]
  *  }
  *
- * Response (JSON):
- *  { contentBase64, fileName, fileUrl }   // same shape as mergePDFs_
+ * Response (per your logs):
+ *  {
+ *    fileName: "Yousif_Mary_Zhara_ClinicLabel.pdf",
+ *    contentBase64: "<base64-pdf>"
+ *  }
  */
 function mergePdfsViaRender_(pdfBlobs, outputName) {
   const url = CFG.MERGE_SERVICE_URL || 'https://pdf-merge-service.onrender.com/merge';
   Logger.log('Merging %s PDFs via %s', pdfBlobs.length, url);
 
+  // 1) Prepare files[] with contentBase64 (NOT "data")
   const files = pdfBlobs.map((blob, i) => {
     try {
       const bytes = blob.getBytes();
@@ -360,7 +313,7 @@ function mergePdfsViaRender_(pdfBlobs, outputName) {
       }
       return {
         name: blob.getName() || ('part' + (i + 1) + '.pdf'),
-        contentBase64: base64
+        contentBase64: base64   // ✅ what the merge service expects
       };
     } catch (err) {
       Logger.log('⚠️ Error reading blob for part %s: %s', i + 1, err);
@@ -378,6 +331,7 @@ function mergePdfsViaRender_(pdfBlobs, outputName) {
   });
   Logger.log('Payload prepared for merge: %s files', files.length);
 
+  // 2) Call the Render merge endpoint
   const res = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
@@ -393,6 +347,7 @@ function mergePdfsViaRender_(pdfBlobs, outputName) {
     throw new Error('Merge API error: ' + code + ' — ' + text);
   }
 
+  // 3) Parse JSON and decode contentBase64
   let merged;
   try {
     merged = JSON.parse(text);
@@ -400,30 +355,22 @@ function mergePdfsViaRender_(pdfBlobs, outputName) {
     throw new Error('Invalid JSON from merge API: ' + text.slice(0, 300));
   }
 
-  // Same response handling pattern as Transportation Helper
-  const base64Out =
-    merged.contentBase64 ||
-    (merged.merged && merged.merged.contentBase64) || // just in case
-    null;
-
-  const fileName = merged.fileName || outputName || 'merged.pdf';
-  let fileUrl = merged.fileUrl || null;
-
-  const folder = DriveApp.getFolderById(CFG.OUTPUT_FOLDER_ID);
-  let file = null;
-
-  if (base64Out) {
-    const bytesOut = Utilities.base64Decode(base64Out);
-    const blobOut = Utilities.newBlob(bytesOut, MimeType.PDF, fileName);
-    file = folder.createFile(blobOut).setName(fileName);
-    fileUrl = file.getUrl();
-  } else if (!fileUrl) {
-    throw new Error('Merge service response did not contain contentBase64 or fileUrl.');
+  const base64Out = merged.contentBase64;
+  if (!base64Out) {
+    throw new Error('Merge service response had no contentBase64 field: ' + text.slice(0, 300));
   }
 
+  const fileName = merged.fileName || outputName || 'merged.pdf';
+  const bytesOut = Utilities.base64Decode(base64Out);
+  const blobOut = Utilities.newBlob(bytesOut, MimeType.PDF, fileName);
+
+  // 4) Save merged file to the clinic output folder
+  const folder = DriveApp.getFolderById(CFG.OUTPUT_FOLDER_ID);
+  const file = folder.createFile(blobOut).setName(fileName);
+
   return {
-    fileId: file ? file.getId() : null,
-    url: fileUrl,
+    fileId: file.getId(),
+    url: file.getUrl(),
     name: fileName
   };
 }
