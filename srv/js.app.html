@@ -1,25 +1,4 @@
 <script>
-  function navigateTo(id) {
-    document.querySelectorAll('.screen').forEach(el => {
-      el.classList.remove('active');
-    });
-    const screen = document.getElementById(id);
-    if (screen) screen.classList.add('active');
-  }
-
-  function navigateToDashboard() {
-    navigateTo('screenDashboard');
-  }
-
-  function navigateToGenerate() {
-    navigateTo('screenGenerate');
-  }
-
-  function navigateToLookup() {
-    navigateTo('screenLookup');
-  }
-
-  // Simple aliases for tiles
   function navigateTo(screenId) {
     document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
     const el = document.getElementById(screenId);
@@ -46,13 +25,12 @@
 
   function onGenerateClick() {
     const eventDateInput = document.getElementById('eventDate').value;
-    const eventDateText = document.getElementById('eventDateText').value.trim();
     const eventLocation = document.getElementById('eventLocation').value.trim();
     const startRow = document.getElementById('startRow').value;
     const endRow = document.getElementById('endRow').value;
 
     const payload = {
-      eventDate: eventDateText || eventDateInput, // use text override if provided
+      eventDate: eventDateInput,   // ⬅️ now just the date field
       eventLocation: eventLocation,
       startRow: Number(startRow),
       endRow: Number(endRow),
