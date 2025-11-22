@@ -1,4 +1,4 @@
-/** Clinic Label Helper — Backend (v0.1)
+/** Clinic Label Helper — Backend (v0.2)
  *
  * - Dashboard + Generate Labels API
  * - For each selected sheet row:
@@ -52,14 +52,13 @@ function apiGenerateLabels(payload) {
     const sheet = ss.getSheetByName(CFG.SHEET_NAME);
     if (!sheet) throw new Error('Sheet not found: ' + CFG.SHEET_NAME);
 
-    const lastCol = sheet.getLastColumn();
-    const headerRow = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    const colIndex = buildColumnIndex_(headerRow);
-
-    // Ensure EventDate & EventLocation columns exist
-    const ensured = ensureEventColumns_(sheet, headerRow, colIndex);
+    // Ensure EventDate & EventLocation columns exist and get fresh header + index
+    const ensured = ensureEventColumns_(sheet);
+    const headerRow = ensured.headerRow;
+    const colIndex = ensured.colIndex;
     const idxEventDate = ensured.idxEventDate;
     const idxEventLocation = ensured.idxEventLocation;
+    const lastCol = headerRow.length;
 
     const numRows = endRow - startRow + 1;
     const rows = sheet.getRange(startRow, 1, numRows, lastCol).getValues();
@@ -73,11 +72,9 @@ function apiGenerateLabels(payload) {
         const placeholders = buildPlaceholderMap_(rowValues, colIndex);
         const outputName = buildOutputFileName_(placeholders);
 
-        // Create merged 4-page label PDF
-        const mergedFile = createMergedLabelPdfForRow_(
-          placeholders,
-          outputName
-        );
+        // Create merged 4-page label PDF (Owner x2, Pet x2)
+        const mergedFile = createMergedLabelPdfForRow_(placeholders, outputName);
+        Logger.log('Row %s merged file: %s', rowNum, mergedFile && mergedFile.url);
 
         // Write date + location back to sheet
         const rowRange = sheet.getRange(rowNum, 1, 1, lastCol);
@@ -124,33 +121,58 @@ function buildColumnIndex_(headerRow) {
 
 /**
  * Ensure EventDate and EventLocation columns exist.
- * Returns 0-based indexes (within the row array).
+ * Returns:
+ *  {
+ *    headerRow: [...],
+ *    colIndex: { headerName: idx, ... },
+ *    idxEventDate: number,
+ *    idxEventLocation: number
+ *  }
  */
-function ensureEventColumns_(sheet, headerRow, colIndex) {
-  const lastCol = headerRow.length;
+function ensureEventColumns_(sheet) {
+  // Use current sheet width
+  let lastCol = sheet.getLastColumn();
+  let headerRange = sheet.getRange(1, 1, 1, lastCol);
+  let headerRow = headerRange.getValues()[0];
+  let colIndex = buildColumnIndex_(headerRow);
+
   let idxEventDate = colIndex[CFG.COLS.EVENT_DATE];
   let idxEventLocation = colIndex[CFG.COLS.EVENT_LOCATION];
 
-  let currentLastCol = lastCol;
-  const updates = headerRow.slice();
+  let changed = false;
 
   if (typeof idxEventDate !== 'number') {
-    updates[currentLastCol] = CFG.COLS.EVENT_DATE;
-    idxEventDate = currentLastCol;
-    currentLastCol++;
+    headerRow.push(CFG.COLS.EVENT_DATE);
+    changed = true;
   }
 
   if (typeof idxEventLocation !== 'number') {
-    updates[currentLastCol] = CFG.COLS.EVENT_LOCATION;
-    idxEventLocation = currentLastCol;
-    currentLastCol++;
+    headerRow.push(CFG.COLS.EVENT_LOCATION);
+    changed = true;
   }
 
-  if (currentLastCol > lastCol) {
-    sheet.getRange(1, 1, 1, currentLastCol).setValues([updates]);
+  if (changed) {
+    // Extend header row range to new length and write back
+    const newLastCol = headerRow.length;
+    sheet.getRange(1, 1, 1, newLastCol).setValues([headerRow]);
+    lastCol = newLastCol;
+
+    // Rebuild index
+    colIndex = buildColumnIndex_(headerRow);
+    idxEventDate = colIndex[CFG.COLS.EVENT_DATE];
+    idxEventLocation = colIndex[CFG.COLS.EVENT_LOCATION];
   }
 
-  return { idxEventDate, idxEventLocation };
+  if (typeof idxEventDate !== 'number' || typeof idxEventLocation !== 'number') {
+    throw new Error('EventDate or EventLocation column could not be ensured.');
+  }
+
+  return {
+    headerRow,
+    colIndex,
+    idxEventDate,
+    idxEventLocation,
+  };
 }
 
 
@@ -276,6 +298,92 @@ function buildOutputFileName_(placeholders) {
 
 
 /**
+ * For a single row:
+ *  - Clone Owner and Pet templates
+ *  - Replace placeholders
+ *  - Export PDFs
+ *  - Send 4 PDFs (Owner x2, Pet x2) to Render merge service
+ *  - Save merged PDF in output folder
+ */
+function createMergedLabelPdfForRow_(placeholders, outputName) {
+  const ownerTemplateFile = DriveApp.getFileById(CFG.OWNER_TEMPLATE_ID);
+  const petTemplateFile   = DriveApp.getFileById(CFG.PET_TEMPLATE_ID);
+
+  // Make temporary copies of each template
+  const ownerCopy = ownerTemplateFile.makeCopy('Owner Label TMP');
+  const petCopy   = petTemplateFile.makeCopy('Pet Label TMP');
+
+  try {
+    const ownerPres = SlidesApp.openById(ownerCopy.getId());
+    const petPres   = SlidesApp.openById(petCopy.getId());
+
+    // Fill placeholders + save
+    applyPlaceholdersToPresentation_(ownerPres, placeholders);
+    applyPlaceholdersToPresentation_(petPres, placeholders);
+
+    // Export to PDF *after* saveAndClose
+    const ownerBlob = ownerCopy.getAs(MimeType.PDF).setName('owner.pdf');
+    const petBlob   = petCopy.getAs(MimeType.PDF).setName('pet.pdf');
+
+    // 4 pages: Owner x2, Pet x2
+    const blobs = [ownerBlob, ownerBlob, petBlob, petBlob];
+
+    const mergedInfo = mergePdfsViaRender_(blobs, outputName);
+    return mergedInfo;
+
+  } finally {
+    // Clean up slide clones
+    try { ownerCopy.setTrashed(true); } catch (e) {}
+    try { petCopy.setTrashed(true); } catch (e) {}
+  }
+}
+
+
+/**
+ * Replace {{placeholders}} across the entire presentation and save.
+ * Ignores any internal fields starting with "_".
+ */
+function applyPlaceholdersToPresentation_(presentation, placeholders) {
+  try {
+    // Primary: presentation-level replaceAllText
+    Object.keys(placeholders).forEach(key => {
+      if (!key.startsWith('{{')) return; // skip helper fields
+      const value = placeholders[key] == null ? '' : String(placeholders[key]);
+      try {
+        presentation.replaceAllText(key, value);
+      } catch (e) {
+        Logger.log('presentation.replaceAllText error on %s → %s', key, e);
+      }
+    });
+
+    // Safety net: per-slide replacement
+    const slides = presentation.getSlides();
+    slides.forEach(slide => {
+      Object.keys(placeholders).forEach(key => {
+        if (!key.startsWith('{{')) return;
+        const value = placeholders[key] == null ? '' : String(placeholders[key]);
+        try {
+          slide.replaceAllText(key, value);
+        } catch (e) {
+          // ignore slide-level errors
+        }
+      });
+    });
+
+  } catch (e) {
+    Logger.log('applyPlaceholdersToPresentation_ error: %s', e);
+  } finally {
+    // Ensure edits are committed before export
+    try {
+      presentation.saveAndClose();
+    } catch (e) {
+      Logger.log('saveAndClose error: %s', e);
+    }
+  }
+}
+
+
+/**
  * Merge PDFs via Render service (same behavior as Transportation Helper,
  * but using in-memory blobs instead of Drive file IDs).
  *
@@ -290,7 +398,7 @@ function buildOutputFileName_(placeholders) {
  *
  * Response (per your logs):
  *  {
- *    fileName: "Yousif_Mary_Zhara_ClinicLabel.pdf",
+ *    fileName: "Last_First_Pet_ClinicLabel.pdf",
  *    contentBase64: "<base64-pdf>"
  *  }
  */
