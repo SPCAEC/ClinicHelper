@@ -339,6 +339,25 @@ function applyPlaceholdersToPresentation_(presentation, placeholders) {
  * Service is assumed to return the merged PDF binary in response body.
  * If your service instead returns JSON with base64, adjust below accordingly.
  */
+/**
+ * Call Render merge service with base64-encoded PDFs.
+ *
+ * Request payload (what we send):
+ * {
+ *   outputName: "file.pdf",
+ *   files: [
+ *     { name: "part1.pdf", data: "<base64string>" },
+ *     ...
+ *   ]
+ * }
+ *
+ * Response payload (what we expect back from Render):
+ *  JSON containing a base64-encoded merged PDF.
+ *  We try a few common property names:
+ *    { ok: true, merged: { data: "..." } }
+ *    { ok: true, data: "..." }
+ *    { data: "..." }
+ */
 function mergePdfsViaRender_(pdfBlobs, outputName) {
   const filesPayload = pdfBlobs.map((blob, i) => ({
     name: blob.getName() || ('part' + (i + 1) + '.pdf'),
@@ -359,12 +378,34 @@ function mergePdfsViaRender_(pdfBlobs, outputName) {
 
   const resp = UrlFetchApp.fetch(CFG.MERGE_SERVICE_URL, options);
   const code = resp.getResponseCode();
+  const text = resp.getContentText();
+
   if (code !== 200) {
-    throw new Error('Merge service error ' + code + ': ' + resp.getContentText());
+    throw new Error('Merge service error ' + code + ': ' + text);
   }
 
-  // Assume direct PDF binary in body
-  const mergedBlob = resp.getBlob().setName(outputName || 'merged.pdf');
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error('Merge service returned non-JSON response: ' + text.slice(0, 300));
+  }
+
+  // Try to find the base64-encoded PDF in a few likely spots
+  let base64Pdf =
+    (json.merged && (json.merged.data || json.merged.base64)) ||
+    json.data ||
+    json.pdf ||
+    json.file ||
+    '';
+
+  if (!base64Pdf) {
+    throw new Error('Merge service JSON did not include base64 PDF data. Response: ' + text.slice(0, 300));
+  }
+
+  const bytes = Utilities.base64Decode(base64Pdf);
+  const mergedBlob = Utilities.newBlob(bytes, 'application/pdf', outputName || 'merged.pdf');
+
   const folder = DriveApp.getFolderById(CFG.OUTPUT_FOLDER_ID);
   const file = folder.createFile(mergedBlob);
 
