@@ -325,92 +325,105 @@ function applyPlaceholdersToPresentation_(presentation, placeholders) {
 
 
 /**
- * Call Render merge service with base64-encoded PDFs.
+ * Merge PDFs via the same Render service used by Transportation Helper.
  *
- * Expected payload (JSON):
- * {
- *   outputName: "file.pdf",
- *   files: [
- *     { name: "part1.pdf", data: "<base64string>" },
- *     ...
- *   ]
- * }
+ * pdfBlobs: array of Blob objects (owner x2, pet x2)
+ * outputName: final merged filename
  *
- * Service is assumed to return the merged PDF binary in response body.
- * If your service instead returns JSON with base64, adjust below accordingly.
- */
-/**
- * Call Render merge service with base64-encoded PDFs.
+ * Request:
+ *  {
+ *    outputName: "file.pdf",
+ *    files: [
+ *      { name: "part1.pdf", contentBase64: "..." },
+ *      ...
+ *    ]
+ *  }
  *
- * Request payload (what we send):
- * {
- *   outputName: "file.pdf",
- *   files: [
- *     { name: "part1.pdf", data: "<base64string>" },
- *     ...
- *   ]
- * }
- *
- * Response payload (what we expect back from Render):
- *  JSON containing a base64-encoded merged PDF.
- *  We try a few common property names:
- *    { ok: true, merged: { data: "..." } }
- *    { ok: true, data: "..." }
- *    { data: "..." }
+ * Response (JSON):
+ *  { contentBase64, fileName, fileUrl }   // same shape as mergePDFs_
  */
 function mergePdfsViaRender_(pdfBlobs, outputName) {
-  const filesPayload = pdfBlobs.map((blob, i) => ({
-    name: blob.getName() || ('part' + (i + 1) + '.pdf'),
-    data: Utilities.base64Encode(blob.getBytes()),
-  }));
+  const url = CFG.MERGE_SERVICE_URL || 'https://pdf-merge-service.onrender.com/merge';
+  Logger.log('Merging %s PDFs via %s', pdfBlobs.length, url);
 
-  const payload = {
+  const files = pdfBlobs.map((blob, i) => {
+    try {
+      const bytes = blob.getBytes();
+      if (!bytes || !bytes.length) {
+        Logger.log('⚠️ Skipping invalid or empty blob for part %s', i + 1);
+        return null;
+      }
+      const base64 = Utilities.base64Encode(bytes);
+      if (!base64) {
+        Logger.log('⚠️ Skipping blob with missing base64 data for part %s', i + 1);
+        return null;
+      }
+      return {
+        name: blob.getName() || ('part' + (i + 1) + '.pdf'),
+        contentBase64: base64
+      };
+    } catch (err) {
+      Logger.log('⚠️ Error reading blob for part %s: %s', i + 1, err);
+      return null;
+    }
+  }).filter(Boolean);
+
+  if (!files.length) {
+    throw new Error('No valid PDFs to merge.');
+  }
+
+  const payload = JSON.stringify({
     outputName: outputName || 'merged.pdf',
-    files: filesPayload,
-  };
+    files
+  });
+  Logger.log('Payload prepared for merge: %s files', files.length);
 
-  const options = {
+  const res = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-  };
+    payload,
+    muteHttpExceptions: true
+  });
 
-  const resp = UrlFetchApp.fetch(CFG.MERGE_SERVICE_URL, options);
-  const code = resp.getResponseCode();
-  const text = resp.getContentText();
+  const code = res.getResponseCode();
+  const text = res.getContentText();
+  Logger.log('Merge response %s: %s', code, text.substring(0, Math.min(500, text.length)));
 
-  if (code !== 200) {
-    throw new Error('Merge service error ' + code + ': ' + text);
+  if (code < 200 || code >= 300) {
+    throw new Error('Merge API error: ' + code + ' — ' + text);
   }
 
-  let json;
+  let merged;
   try {
-    json = JSON.parse(text);
-  } catch (e) {
-    throw new Error('Merge service returned non-JSON response: ' + text.slice(0, 300));
+    merged = JSON.parse(text);
+  } catch (err) {
+    throw new Error('Invalid JSON from merge API: ' + text.slice(0, 300));
   }
 
-  // Try to find the base64-encoded PDF in a few likely spots
-  let base64Pdf =
-    (json.merged && (json.merged.data || json.merged.base64)) ||
-    json.data ||
-    json.pdf ||
-    json.file ||
-    '';
+  // Same response handling pattern as Transportation Helper
+  const base64Out =
+    merged.contentBase64 ||
+    (merged.merged && merged.merged.contentBase64) || // just in case
+    null;
 
-  if (!base64Pdf) {
-    throw new Error('Merge service JSON did not include base64 PDF data. Response: ' + text.slice(0, 300));
-  }
-
-  const bytes = Utilities.base64Decode(base64Pdf);
-  const mergedBlob = Utilities.newBlob(bytes, 'application/pdf', outputName || 'merged.pdf');
+  const fileName = merged.fileName || outputName || 'merged.pdf';
+  let fileUrl = merged.fileUrl || null;
 
   const folder = DriveApp.getFolderById(CFG.OUTPUT_FOLDER_ID);
-  const file = folder.createFile(mergedBlob);
+  let file = null;
+
+  if (base64Out) {
+    const bytesOut = Utilities.base64Decode(base64Out);
+    const blobOut = Utilities.newBlob(bytesOut, MimeType.PDF, fileName);
+    file = folder.createFile(blobOut).setName(fileName);
+    fileUrl = file.getUrl();
+  } else if (!fileUrl) {
+    throw new Error('Merge service response did not contain contentBase64 or fileUrl.');
+  }
 
   return {
-    fileId: file.getId(),
-    url: file.getUrl(),
+    fileId: file ? file.getId() : null,
+    url: fileUrl,
+    name: fileName
   };
 }
